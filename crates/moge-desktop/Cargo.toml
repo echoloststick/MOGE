@@ -1,0 +1,12 @@
+# Standalone workspace; not part of the APK build.
+[workspace]
+
+[package]
+name = "moge-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+moge-app = { path = "../moge-app" }
+winit = "0.30"
+env_logger = "0.11"

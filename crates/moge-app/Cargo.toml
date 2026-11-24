@@ -1,0 +1,40 @@
+# Standalone workspace: keeps the std-only crates buildable offline and gives cargo-apk its own lockfile.
+[workspace]
+
+[package]
+name = "moge-app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+moge-math = { path = "../moge-math" }
+winit = { version = "0.30", features = ["android-native-activity"] }
+wgpu = "22"
+pollster = "0.3"
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+
+# cargo-apk refuses release builds without a keystore, so the dev profile is optimized instead.
+[profile.dev]
+opt-level = 3
+debug = false
+
+[package.metadata.android]
+package = "com.studiomobi.moge"
+apk_name = "MOGE"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 33
+
+[package.metadata.android.application]
+label = "MOGE"
+
+[package.metadata.android.application.activity]
+orientation = "landscape"
