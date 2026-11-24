@@ -1,0 +1,7 @@
+[package]
+name = "moge-formats"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+moge-core = { path = "../moge-core" }

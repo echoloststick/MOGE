@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/moge-core", "crates/moge-formats", "crates/moge-math"]
+exclude = ["crates/moge-app"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
