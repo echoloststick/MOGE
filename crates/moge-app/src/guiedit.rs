@@ -211,8 +211,12 @@ impl Studio {
         for g in &self.gui.guides {
             let s = Stroke::new(1.0, Color32::from_rgb(255, 80, 200));
             match g {
-                moge_gui::Guide::Vertical(x) => painter.line_segment([Pos2::new(origin.x + x * zoom, screen.top()), Pos2::new(origin.x + x * zoom, screen.bottom())], s),
-                moge_gui::Guide::Horizontal(y) => painter.line_segment([Pos2::new(screen.left(), origin.y + y * zoom), Pos2::new(screen.right(), origin.y + y * zoom)], s),
+                moge_gui::Guide::Vertical(x) => {
+                    painter.line_segment([Pos2::new(origin.x + x * zoom, screen.top()), Pos2::new(origin.x + x * zoom, screen.bottom())], s);
+                }
+                moge_gui::Guide::Horizontal(y) => {
+                    painter.line_segment([Pos2::new(screen.left(), origin.y + y * zoom), Pos2::new(screen.right(), origin.y + y * zoom)], s);
+                }
             }
         }
     }
@@ -324,7 +328,9 @@ impl Studio {
             } else {
                 self.request_image(&key);
                 match self.images.get(&key) {
-                    Some(Img::Ready(tex)) => p.image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint),
+                    Some(Img::Ready(tex)) => {
+                        p.image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), tint);
+                    }
                     Some(Img::Loading) => {
                         p.text(rect.center(), Align2::CENTER_CENTER, "loading image...", FontId::proportional(12.0), Color32::from_gray(200));
                     }

@@ -1,0 +1,12 @@
+# Standalone workspace: it builds Luau from source (C++), so it is kept apart from the std-only crates.
+[workspace]
+
+[package]
+name = "moge-luau"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+moge-core = { path = "../moge-core" }
+moge-math = { path = "../moge-math" }
+mlua = { version = "0.10", features = ["luau"] }

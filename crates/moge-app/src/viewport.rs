@@ -56,7 +56,7 @@ impl Studio {
             }
             if resp.drag_started_by(PointerButton::Primary) {
                 if let Some(pos) = resp.interact_pointer_pos() {
-                    let l = pos - rect.min;
+                    let l = (pos - rect.min).to_pos2();
                     self.drag3d = Some(self.begin_drag(&vp, l, w, h));
                 }
             }
@@ -82,7 +82,7 @@ impl Studio {
             }
             if resp.clicked() {
                 if let Some(pos) = resp.interact_pointer_pos() {
-                    let l = pos - rect.min;
+                    let l = (pos - rect.min).to_pos2();
                     let (o, d) = self.cam.ray(l.x, l.y, w, h);
                     match self.scene.pick(o, d) {
                         Some((id, _)) => {
@@ -134,7 +134,9 @@ impl Studio {
                     let col = if hot { Color32::WHITE } else { AXIS_COLORS[i] };
                     painter.line_segment([o, e], Stroke::new(if hot { 5.0 } else { 3.0 }, col));
                     match self.tool {
-                        Tool::Scale => painter.rect_filled(Rect::from_center_size(e, egui::vec2(18.0, 18.0)), 2.0, col),
+                        Tool::Scale => {
+                            painter.rect_filled(Rect::from_center_size(e, egui::vec2(18.0, 18.0)), 2.0, col);
+                        }
                         Tool::Rotate => {
                             painter.circle_stroke(e, 11.0, Stroke::new(3.0, col));
                             let n = 48;
@@ -149,7 +151,9 @@ impl Studio {
                                 .collect();
                             painter.add(egui::Shape::line(pts, Stroke::new(1.5, col.gamma_multiply(0.7))));
                         }
-                        _ => painter.circle_filled(e, 10.0, col),
+                        _ => {
+                            painter.circle_filled(e, 10.0, col);
+                        }
                     }
                 }
             }

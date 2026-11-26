@@ -133,6 +133,13 @@ impl Studio {
     fn top_bar(&mut self, ctx: &Context) {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
+                if self.run_cancel.is_some() {
+                    if ui.button("■ Stop").clicked() {
+                        self.stop_run();
+                    }
+                } else if ui.button("▶ Run").clicked() {
+                    self.start_run();
+                }
                 ui.menu_button("File", |ui| {
                     if ui.button("New").clicked() {
                         if self.ed.dirty {

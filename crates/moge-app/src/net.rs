@@ -54,6 +54,8 @@ pub enum Msg {
     Games(Result<Vec<Game>, String>),
     Published(Result<u64, String>),
     Image { key: String, image: Result<Image, String> },
+    RunLine(crate::studio::Level, String),
+    RunDone,
 }
 
 pub struct Net {
@@ -65,6 +67,10 @@ impl Net {
     pub fn new() -> Net {
         let (tx, rx) = channel();
         Net { tx, rx }
+    }
+
+    pub fn sender(&self) -> Sender<Msg> {
+        self.tx.clone()
     }
 
     pub fn spawn<F: FnOnce() -> Msg + Send + 'static>(&self, f: F) {

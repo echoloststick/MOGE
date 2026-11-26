@@ -46,7 +46,7 @@ pub struct Node {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Tree {
     nodes: Vec<Option<Node>>,
 }

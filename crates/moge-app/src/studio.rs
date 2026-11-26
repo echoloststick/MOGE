@@ -252,6 +252,7 @@ pub struct Studio {
     pub gui: GuiState,
     pub images: HashMap<String, Img>,
     pub output: Vec<(Level, String)>,
+    pub run_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub net: Net,
     pub http: Arc<UreqHttp>,
     pub inject: Vec<egui::Event>,
@@ -324,6 +325,7 @@ impl Studio {
             gui: GuiState { root: None, device: 0, zoom: 1.0, pan: egui::Vec2::ZERO, mode: Mode::Offset, drag: None, guides: Vec::new(), snap: true, fit_pending: true },
             images: HashMap::new(),
             output: Vec::new(),
+            run_cancel: None,
             net: Net::new(),
             http: Arc::new(UreqHttp::new()),
             inject: Vec::new(),
@@ -827,6 +829,11 @@ impl Studio {
                             self.log(Level::Error, format!("Publish failed: {e}"));
                         }
                     }
+                }
+                Msg::RunLine(l, m) => self.log(l, m),
+                Msg::RunDone => {
+                    self.run_cancel = None;
+                    self.log(Level::Info, "Run finished");
                 }
                 Msg::Image { key, image } => match image {
                     Ok(img) => {

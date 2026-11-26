@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/moge-core", "crates/moge-formats", "crates/moge-math", "crates/moge-scene", "crates/moge-gui", "crates/moge-script", "crates/moge-roblox"]
-exclude = ["crates/moge-app", "crates/moge-desktop"]
+exclude = ["crates/moge-app", "crates/moge-desktop", "crates/moge-luau"]
 resolver = "2"
 
 [workspace.package]

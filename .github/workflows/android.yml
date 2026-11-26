@@ -36,7 +36,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/moge-app
+          workspaces: |
+            crates/moge-app
+            crates/moge-luau
 
       - name: Run core tests
         run: cargo test --workspace
@@ -52,9 +54,23 @@ jobs:
       - name: Remove stale examples (cargo-apk would package each one as its own APK)
         run: rm -rf crates/moge-app/examples
 
-      - name: Build APK
+      - name: Test the Luau runtime (mlua)
+        working-directory: crates/moge-luau
+        continue-on-error: true
+        run: cargo test
+
+      - name: Build APK (with Luau)
+        id: apk
+        continue-on-error: true
         working-directory: crates/moge-app
         run: cargo apk build
+
+      - name: Build APK without Luau (fallback, only runs if the build above failed)
+        if: steps.apk.outcome == 'failure'
+        working-directory: crates/moge-app
+        run: |
+          echo "::warning::The Luau build failed, so this APK has NO script execution. Send the log of the previous step."
+          cargo apk build --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:

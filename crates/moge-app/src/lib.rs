@@ -5,6 +5,7 @@ mod input;
 mod mesh;
 mod net;
 mod panels;
+mod run;
 mod script;
 mod studio;
 mod viewport;
