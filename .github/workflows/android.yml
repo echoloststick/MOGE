@@ -48,11 +48,11 @@ jobs:
           mkdir -p crates/moge-app/assets
           curl -fsSL --retry 3 -o crates/moge-app/assets/Full-API-Dump.json https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/Full-API-Dump.json || rm -f crates/moge-app/assets/Full-API-Dump.json
 
-      - name: Use a fixed signing key and an increasing version code (lets new APKs update the installed app)
+      - name: Use a fixed signing key and an increasing version (cargo-apk derives the Android version code from it) (lets new APKs update the installed app)
         run: |
           mkdir -p ~/.android
           base64 -d crates/moge-app/moge-debug.keystore.b64 > ~/.android/debug.keystore
-          sed -i "s/^version_code = .*/version_code = ${{ github.run_number }}/" crates/moge-app/Cargo.toml
+          sed -i "0,/^version = .*/s//version = \"0.1.${{ github.run_number }}\"/" crates/moge-app/Cargo.toml
 
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked

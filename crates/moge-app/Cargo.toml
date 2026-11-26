@@ -42,7 +42,6 @@ debug = false
 
 [package.metadata.android]
 package = "com.studiomobi.moge"
-version_code = 1
 apk_name = "MOGE"
 build_targets = ["aarch64-linux-android"]
 
