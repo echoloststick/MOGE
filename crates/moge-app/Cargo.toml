@@ -34,6 +34,7 @@ log = "0.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.14"
+jni = "0.21"
 
 # cargo-apk refuses release builds without a keystore, so the dev profile is optimized instead.
 [profile.dev]

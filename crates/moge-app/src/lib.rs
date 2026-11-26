@@ -1,4 +1,5 @@
 //! MOGE app shell: window, egui frame loop, GPU renderer. Android entry point is `android_main`.
+mod clip;
 mod gfx;
 mod guiedit;
 mod input;
@@ -91,7 +92,13 @@ impl App {
         let ppp = g.window.scale_factor() as f32 * ui_scale;
         self.ctx.set_pixels_per_point(ppp);
         let (w, h) = g.size();
-        let mut raw = self.input.take((w, h), ppp, self.start.elapsed().as_secs_f64());
+        #[cfg(target_os = "android")]
+        let kb_up = self.system_kb;
+        #[cfg(not(target_os = "android"))]
+        let kb_up = false;
+        // The Android keyboard covers the lower part of the screen: lay the UI out in the visible upper part.
+        let h_eff = if kb_up { (h as f32 * 0.5) as u32 } else { h };
+        let mut raw = self.input.take((w, h_eff), ppp, self.start.elapsed().as_secs_f64());
         raw.events.extend(self.studio.inject.drain(..));
         let studio = &mut self.studio;
         let out = self.ctx.run(raw, |ctx| {
@@ -108,6 +115,14 @@ impl App {
         if let Some(u) = &out.platform_output.open_url {
             if let Err(e) = webbrowser::open(&u.url) {
                 log::warn!("Could not open {}: {e}", u.url);
+            }
+        }
+        #[cfg(target_os = "android")]
+        if studio.paste_req {
+            studio.paste_req = false;
+            match self.android.as_ref().and_then(clip::clipboard_text) {
+                Some(t) if !t.is_empty() => studio.inject.push(egui::Event::Paste(t)),
+                _ => studio.log(crate::studio::Level::Warn, "The clipboard is empty or could not be read"),
             }
         }
         #[cfg(target_os = "android")]

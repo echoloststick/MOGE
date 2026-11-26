@@ -56,6 +56,13 @@ fn key_button(ui: &mut Ui, label: &str, size: egui::Vec2) -> bool {
 impl Studio {
     pub fn ui(&mut self, ctx: &Context) {
         self.track_keyboard(ctx);
+        if !self.settings.vkb && ctx.wants_keyboard_input() {
+            egui::Area::new(egui::Id::new("paste_btn")).anchor(Align2::RIGHT_TOP, [-8.0, 52.0]).order(egui::Order::Foreground).show(ctx, |ui| {
+                if key_button(ui, "Paste", egui::vec2(64.0, 34.0)) {
+                    self.paste_req = true;
+                }
+            });
+        }
         self.top_bar(ctx);
         if self.settings.vkb && self.vkb_open && ctx.wants_keyboard_input() {
             self.vkb(ctx);
