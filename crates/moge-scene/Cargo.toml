@@ -1,0 +1,8 @@
+[package]
+name = "moge-scene"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+moge-core = { path = "../moge-core" }
+moge-math = { path = "../moge-math" }

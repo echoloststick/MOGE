@@ -8,6 +8,8 @@ pub struct PropInfo {
     pub name: String,
     pub value_type: String,
     pub category: String,
+    /// Properties-panel section from the dump (Data, Appearance, Behavior...).
+    pub group: String,
     pub read_only: bool,
     pub hidden: bool,
     pub deprecated: bool,
@@ -49,11 +51,30 @@ impl PropInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberKind {
+    Method,
+    Event,
+    Callback,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemberInfo {
+    pub name: String,
+    pub kind: MemberKind,
+    /// "(a: number, b: string) -> Instance" style summary for the completion popup.
+    pub signature: String,
+    pub return_type: String,
+    pub deprecated: bool,
+    pub hidden: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
     pub name: String,
     pub superclass: Option<String>,
     pub props: Vec<PropInfo>,
+    pub members: Vec<MemberInfo>,
     pub creatable: bool,
     pub service: bool,
     pub deprecated: bool,
@@ -95,8 +116,40 @@ impl ApiDump {
             let superclass = c.get("Superclass").and_then(|s| s.as_str()).filter(|s| *s != "<<<ROOT>>>").map(String::from);
             let ct = tags(c);
             let mut props = Vec::new();
+            let mut members = Vec::new();
             for m in c.get("Members").and_then(|m| m.as_arr()).unwrap_or(&[]) {
-                if m.get("MemberType").and_then(|t| t.as_str()) != Some("Property") {
+                let mtype = m.get("MemberType").and_then(|t| t.as_str());
+                let kind = match mtype {
+                    Some("Function") => Some(MemberKind::Method),
+                    Some("Event") => Some(MemberKind::Event),
+                    Some("Callback") => Some(MemberKind::Callback),
+                    _ => None,
+                };
+                if let (Some(kind), Some(mname)) = (kind, m.get("Name").and_then(|n| n.as_str())) {
+                    let params: Vec<String> = m
+                        .get("Parameters")
+                        .and_then(|p| p.as_arr())
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|p| {
+                            let n = p.get("Name").and_then(|n| n.as_str()).unwrap_or("_");
+                            let t = p.get("Type").and_then(|t| t.get("Name")).and_then(|n| n.as_str()).unwrap_or("any");
+                            format!("{n}: {t}")
+                        })
+                        .collect();
+                    let ret = m.get("ReturnType").and_then(|t| t.get("Name")).and_then(|n| n.as_str()).unwrap_or("").to_string();
+                    let mt = tags(m);
+                    members.push(MemberInfo {
+                        name: mname.to_string(),
+                        kind,
+                        signature: if ret.is_empty() { format!("({})", params.join(", ")) } else { format!("({}) -> {ret}", params.join(", ")) },
+                        return_type: ret,
+                        deprecated: mt.contains(&"Deprecated"),
+                        hidden: mt.contains(&"NotBrowsable"),
+                    });
+                    continue;
+                }
+                if mtype != Some("Property") {
                     continue;
                 }
                 let Some(pname) = m.get("Name").and_then(|n| n.as_str()) else { continue };
@@ -107,6 +160,7 @@ impl ApiDump {
                     name: pname.to_string(),
                     value_type: vt.and_then(|v| v.get("Name")).and_then(|n| n.as_str()).unwrap_or("").to_string(),
                     category: vt.and_then(|v| v.get("Category")).and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                    group: m.get("Category").and_then(|n| n.as_str()).unwrap_or("Data").to_string(),
                     read_only: mt.contains(&"ReadOnly") || !matches!(ws, "None" | "PluginSecurity"),
                     hidden: mt.contains(&"NotBrowsable"),
                     deprecated: mt.contains(&"Deprecated"),
@@ -120,6 +174,7 @@ impl ApiDump {
                     name,
                     superclass,
                     props,
+                    members,
                     creatable: !ct.contains(&"NotCreatable"),
                     service: ct.contains(&"Service"),
                     deprecated: ct.contains(&"Deprecated"),
@@ -171,6 +226,28 @@ impl ApiDump {
         self.chain(class).into_iter().find_map(|c| c.props.iter().find(|p| p.name == name))
     }
 
+    /// Methods/events/callbacks of the class and its ancestors (nearest class wins on name clashes).
+    pub fn members(&self, class: &str) -> Vec<&MemberInfo> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for c in self.chain(class) {
+            for m in &c.members {
+                if seen.insert((m.name.as_str(), m.kind == MemberKind::Event)) {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn enum_names(&self) -> impl Iterator<Item = &str> {
+        self.enums.keys().map(|s| s.as_str())
+    }
+
+    pub fn class_names(&self) -> impl Iterator<Item = &str> {
+        self.order.iter().map(|s| s.as_str())
+    }
+
     /// All properties, base class first, each name once.
     pub fn properties(&self, class: &str) -> Vec<&PropInfo> {
         let mut seen = std::collections::HashSet::new();
@@ -187,6 +264,10 @@ impl ApiDump {
 
     pub fn enum_item_name(&self, en: &str, value: u32) -> Option<&str> {
         self.enums.get(en)?.items.iter().find(|(_, v)| *v == value).map(|(n, _)| n.as_str())
+    }
+
+    pub fn enum_items(&self, en: &str) -> &[(String, u32)] {
+        self.enums.get(en).map(|e| e.items.as_slice()).unwrap_or(&[])
     }
 
     pub fn enum_value(&self, en: &str, item: &str) -> Option<u32> {
@@ -231,7 +312,9 @@ pub(crate) const TEST_DUMP: &str = r#"{"Classes":[
    {"MemberType":"Property","Name":"Name","ValueType":{"Category":"Primitive","Name":"string"},"Security":{"Read":"None","Write":"None"}},
    {"MemberType":"Property","Name":"Parent","ValueType":{"Category":"Class","Name":"Instance"},"Security":{"Read":"None","Write":"None"}},
    {"MemberType":"Property","Name":"ClassName","ValueType":{"Category":"Primitive","Name":"string"},"Tags":["ReadOnly"],"Security":{"Read":"None","Write":"None"}},
-   {"MemberType":"Function","Name":"Destroy"}]},
+   {"MemberType":"Function","Name":"Destroy","Parameters":[],"ReturnType":{"Name":"null"}},
+   {"MemberType":"Function","Name":"FindFirstChild","Parameters":[{"Name":"name","Type":{"Name":"string"}}],"ReturnType":{"Name":"Instance"}},
+   {"MemberType":"Event","Name":"ChildAdded","Parameters":[{"Name":"child","Type":{"Name":"Instance"}}]}]},
  {"Name":"BasePart","Superclass":"Instance","Tags":["NotCreatable"],"Members":[
    {"MemberType":"Property","Name":"Position","ValueType":{"Category":"DataType","Name":"Vector3"},"Security":"None"},
    {"MemberType":"Property","Name":"Transparency","ValueType":{"Category":"Primitive","Name":"float"},"Security":"None"},
@@ -258,6 +341,15 @@ mod tests {
         assert!(d.property("Part", "ClassName").unwrap().read_only);
         assert_eq!(d.enum_item_name("Material", 288), Some("Neon"));
         assert_eq!(d.enum_value("Material", "Plastic"), Some(256));
+    }
+
+    #[test]
+    fn methods_and_events_are_inherited() {
+        let d = ApiDump::from_json(TEST_DUMP).unwrap();
+        let m: Vec<_> = d.members("Part").iter().map(|m| (m.name.as_str(), m.kind)).collect();
+        assert!(m.contains(&("Destroy", MemberKind::Method)) && m.contains(&("ChildAdded", MemberKind::Event)));
+        let f = d.members("Part").into_iter().find(|m| m.name == "FindFirstChild").unwrap();
+        assert_eq!(f.signature, "(name: string) -> Instance");
     }
 
     #[test]

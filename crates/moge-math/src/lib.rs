@@ -54,6 +54,52 @@ pub fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> Mat4 {
     [x[0], y[0], z[0], 0., x[1], y[1], z[1], 0., x[2], y[2], z[2], 0., -dot(x, eye), -dot(y, eye), -dot(z, eye), 1.]
 }
 
+/// Row-major 3x3 product `a * b`.
+pub fn mat3_mul(a: &[f32; 9], b: &[f32; 9]) -> [f32; 9] {
+    let mut o = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            o[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    o
+}
+
+/// Roblox `CFrame.fromOrientation`: R = Ry * Rx * Rz (radians). Result is row-major.
+pub fn euler_yxz_to_rot(rx: f32, ry: f32, rz: f32) -> [f32; 9] {
+    let (sx, cx) = rx.sin_cos();
+    let (sy, cy) = ry.sin_cos();
+    let (sz, cz) = rz.sin_cos();
+    let rx = [1., 0., 0., 0., cx, -sx, 0., sx, cx];
+    let ry = [cy, 0., sy, 0., 1., 0., -sy, 0., cy];
+    let rz = [cz, -sz, 0., sz, cz, 0., 0., 0., 1.];
+    mat3_mul(&ry, &mat3_mul(&rx, &rz))
+}
+
+/// Roblox `CFrame:ToOrientation` (radians, YXZ order).
+pub fn rot_to_euler_yxz(r: &[f32; 9]) -> [f32; 3] {
+    let x = (-r[5]).clamp(-1.0, 1.0).asin();
+    if x.cos().abs() > 1e-4 {
+        [x, r[2].atan2(r[8]), r[3].atan2(r[4])]
+    } else {
+        [x, (-r[6]).atan2(r[0]), 0.0]
+    }
+}
+
+/// Column-major model matrix: rotation (row-major `rot`) with each local axis scaled by `size`, then translated.
+pub fn model_matrix(pos: [f32; 3], rot: &[f32; 9], size: [f32; 3]) -> Mat4 {
+    let mut m = IDENTITY;
+    for c in 0..3 {
+        for r in 0..3 {
+            m[c * 4 + r] = rot[r * 3 + c] * size[c];
+        }
+    }
+    m[12] = pos[0];
+    m[13] = pos[1];
+    m[14] = pos[2];
+    m
+}
+
 /// Orbit camera around `target`: drag to rotate, pinch/scroll to zoom.
 #[derive(Clone, Copy, Debug)]
 pub struct OrbitCamera {
@@ -91,6 +137,46 @@ impl OrbitCamera {
         if factor.is_finite() && factor > 0.0 {
             self.dist = (self.dist * factor).clamp(Self::MIN_DIST, Self::MAX_DIST);
         }
+    }
+
+    /// Pan the target in the camera plane (pixel deltas scale with distance).
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        let (right, up) = self.basis();
+        let k = self.dist * 0.0015;
+        for i in 0..3 {
+            self.target[i] += (-right[i] * dx + up[i] * dy) * k;
+        }
+    }
+
+    /// Frame a sphere (used by "Focus selection").
+    pub fn focus(&mut self, center: [f32; 3], radius: f32) {
+        self.target = center;
+        self.dist = (radius.max(0.5) * 2.6).clamp(Self::MIN_DIST, Self::MAX_DIST);
+    }
+
+    pub fn forward(&self) -> [f32; 3] {
+        norm(sub(self.target, self.eye()))
+    }
+
+    pub fn basis(&self) -> ([f32; 3], [f32; 3]) {
+        let f = self.forward();
+        let right = norm(cross(f, [0.0, 1.0, 0.0]));
+        (right, cross(right, f))
+    }
+
+    /// World-space ray through a pixel: (origin, normalized direction).
+    pub fn ray(&self, px: f32, py: f32, w: f32, h: f32) -> ([f32; 3], [f32; 3]) {
+        let (right, up) = self.basis();
+        let f = self.forward();
+        let t = (60f32.to_radians() * 0.5).tan();
+        let aspect = (w / h.max(1.0)).max(0.01);
+        let nx = (px / w.max(1.0)) * 2.0 - 1.0;
+        let ny = 1.0 - (py / h.max(1.0)) * 2.0;
+        let mut d = [0.0; 3];
+        for i in 0..3 {
+            d[i] = f[i] + right[i] * nx * t * aspect + up[i] * ny * t;
+        }
+        (self.eye(), norm(d))
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
@@ -141,6 +227,59 @@ mod tests {
         assert!(close(c[0] / c[3], 0.0) && close(c[1] / c[3], 0.0));
         let z = c[2] / c[3];
         assert!(z > 0.0 && z < 1.0);
+    }
+
+    #[test]
+    fn euler_round_trip_and_known_values() {
+        for &(a, b, c) in &[(0.3f32, 1.1, -0.7), (-1.2, 2.5, 0.4), (0.0, 0.0, 0.0), (1.0, -3.0, 2.0)] {
+            let r = euler_yxz_to_rot(a, b, c);
+            let e = rot_to_euler_yxz(&r);
+            let r2 = euler_yxz_to_rot(e[0], e[1], e[2]);
+            for k in 0..9 {
+                assert!(close(r[k], r2[k]), "{a} {b} {c}: {r:?} vs {r2:?}");
+            }
+        }
+        let r = euler_yxz_to_rot(0.0, std::f32::consts::FRAC_PI_2, 0.0);
+        let p = [r[0] * 1.0 + r[2] * 0.0, r[3], r[6]];
+        assert!(close(p[0], 0.0) && close(p[2], -1.0), "Y rotation of +X must point to -Z: {p:?}");
+        let g = rot_to_euler_yxz(&euler_yxz_to_rot(std::f32::consts::FRAC_PI_2, 0.5, 0.0));
+        assert!(close(g[0], std::f32::consts::FRAC_PI_2));
+    }
+
+    #[test]
+    fn model_matrix_scales_local_axes() {
+        let rot = euler_yxz_to_rot(0.0, std::f32::consts::FRAC_PI_2, 0.0);
+        let m = model_matrix([1., 2., 3.], &rot, [2., 4., 6.]);
+        let v = transform(&m, [1., 0., 0., 1.]);
+        assert!(close(v[0], 1.0) && close(v[1], 2.0) && close(v[2], 3.0 - 2.0), "{v:?}");
+    }
+
+    #[test]
+    fn ray_matches_projection() {
+        let cam = OrbitCamera { target: [1.0, 2.0, 3.0], yaw: 0.9, pitch: 0.3, dist: 12.0 };
+        let (w, h) = (1600.0, 720.0);
+        let world = [4.0f32, 1.0, -2.0];
+        let c = transform(&cam.view_proj(w / h), [world[0], world[1], world[2], 1.0]);
+        let (nx, ny) = (c[0] / c[3], c[1] / c[3]);
+        let (px, py) = ((nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h);
+        let (o, d) = cam.ray(px, py, w, h);
+        let v = [world[0] - o[0], world[1] - o[1], world[2] - o[2]];
+        let t = dot(v, d);
+        let miss = [v[0] - d[0] * t, v[1] - d[1] * t, v[2] - d[2] * t];
+        assert!(dot(miss, miss).sqrt() < 1e-2, "ray misses by {miss:?}");
+        let (_, cd) = cam.ray(w / 2.0, h / 2.0, w, h);
+        let f = cam.forward();
+        assert!(dot(cd, f) > 0.9999);
+    }
+
+    #[test]
+    fn pan_and_focus() {
+        let mut cam = OrbitCamera::default();
+        cam.pan(100.0, 0.0);
+        assert!(cam.target[0].abs() + cam.target[2].abs() > 0.1);
+        cam.focus([5.0, 5.0, 5.0], 10.0);
+        assert_eq!(cam.target, [5.0, 5.0, 5.0]);
+        assert!(cam.dist > 20.0);
     }
 
     #[test]

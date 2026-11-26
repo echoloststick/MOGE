@@ -1,11 +1,30 @@
-//! GPU state: surface, depth buffer and a lit-by-face cube. Errors are plain strings logged by the caller.
+//! GPU state: surface, depth buffer, procedural Roblox-like sky, lit part meshes and the egui renderer.
+//! Errors are plain strings logged by the caller.
+use crate::mesh;
 use moge_math::OrbitCamera;
+use moge_scene::{Lighting, Scene};
+use std::ops::Range;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const CLEAR: wgpu::Color = wgpu::Color { r: 0.10, g: 0.25, b: 0.45, a: 1.0 };
+const INSTANCE_FLOATS: usize = 24;
+const GLOBAL_FLOATS: usize = 16 + 9 * 4;
+
+pub struct SceneInput<'a> {
+    pub cam: &'a OrbitCamera,
+    pub lighting: &'a Lighting,
+    /// Viewport in physical pixels: x, y, w, h.
+    pub viewport: [f32; 4],
+    pub draw3d: bool,
+}
+
+pub struct EguiInput {
+    pub prims: Vec<egui::ClippedPrimitive>,
+    pub textures: egui::TexturesDelta,
+    pub ppp: f32,
+}
 
 pub struct Gfx {
     pub window: Arc<Window>,
@@ -13,38 +32,24 @@ pub struct Gfx {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    pipeline: wgpu::RenderPipeline,
+    srgb: bool,
+    sky_pipe: wgpu::RenderPipeline,
+    opaque_pipe: wgpu::RenderPipeline,
+    alpha_pipe: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
-    uniform_buf: wgpu::Buffer,
-    vertex_buf: wgpu::Buffer,
-    vertex_count: u32,
+    globals: wgpu::Buffer,
+    mesh_buf: wgpu::Buffer,
+    shape_ranges: [Range<u32>; mesh::SHAPES],
+    instances: Option<wgpu::Buffer>,
+    /// (shape, instance range) for opaque and transparent batches.
+    opaque: Vec<(usize, Range<u32>)>,
+    alpha: Vec<(usize, Range<u32>)>,
     depth_view: wgpu::TextureView,
+    egui: egui_wgpu::Renderer,
 }
 
-fn f32_bytes(v: &[f32]) -> Vec<u8> {
+fn bytes(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_ne_bytes()).collect()
-}
-
-/// 36 vertices, each `position(3) + color(3)`. Every face has u x v = normal, so the winding is CCW from outside.
-fn cube_vertices() -> Vec<f32> {
-    let faces: [([f32; 3], [f32; 3], [f32; 3], f32); 6] = [
-        ([1., 0., 0.], [0., 1., 0.], [0., 0., 1.], 0.80),
-        ([-1., 0., 0.], [0., 0., 1.], [0., 1., 0.], 0.80),
-        ([0., 1., 0.], [0., 0., 1.], [1., 0., 0.], 1.00),
-        ([0., -1., 0.], [1., 0., 0.], [0., 0., 1.], 0.50),
-        ([0., 0., 1.], [1., 0., 0.], [0., 1., 0.], 0.65),
-        ([0., 0., -1.], [0., 1., 0.], [1., 0., 0.], 0.65),
-    ];
-    let mut out = Vec::with_capacity(36 * 6);
-    for (n, u, v, shade) in faces {
-        let p = |a: f32, b: f32| [(n[0] + u[0] * a + v[0] * b) * 0.5, (n[1] + u[1] * a + v[1] * b) * 0.5, (n[2] + u[2] * a + v[2] * b) * 0.5];
-        let quad = [p(-1., -1.), p(1., -1.), p(1., 1.), p(-1., 1.)];
-        for i in [0usize, 1, 2, 0, 2, 3] {
-            out.extend_from_slice(&quad[i]);
-            out.extend_from_slice(&[0.64 * shade, 0.64 * shade, 0.66 * shade]);
-        }
-    }
-    out
 }
 
 fn create_depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
@@ -65,10 +70,7 @@ fn create_depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView
 impl Gfx {
     pub async fn new(window: Arc<Window>) -> Result<Gfx, String> {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
-            ..Default::default()
-        });
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN | wgpu::Backends::GL, ..Default::default() });
         let surface = instance.create_surface(window.clone()).map_err(|e| format!("Failed to create the render surface: {e}"))?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -106,71 +108,82 @@ impl Gfx {
         };
         surface.configure(&device, &config);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cube"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("cube.wgsl").into()),
-        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("scene"), source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()) });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("uniforms"),
+            label: Some("globals"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
                 count: None,
             }],
         });
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("mvp"),
-            size: 64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("uniforms"),
-            layout: &bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() }],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cube"),
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
-        });
-        let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cube"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[wgpu::VertexBufferLayout { array_stride: 24, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
-            }),
-            primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Back), ..Default::default() },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-        let verts = cube_vertices();
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube"),
-            contents: &f32_bytes(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let globals = device.create_buffer(&wgpu::BufferDescriptor { label: Some("globals"), size: (GLOBAL_FLOATS * 4) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("globals"), layout: &bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }] });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("scene"), bind_group_layouts: &[&bgl], push_constant_ranges: &[] });
+
+        let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let inst_attrs = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
+        let part_buffers = [
+            wgpu::VertexBufferLayout { array_stride: 24, step_mode: wgpu::VertexStepMode::Vertex, attributes: &mesh_attrs },
+            wgpu::VertexBufferLayout { array_stride: (INSTANCE_FLOATS * 4) as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &inst_attrs },
+        ];
+        let make = |label: &str, vs: &str, fs: &str, buffers: &[wgpu::VertexBufferLayout], depth_write: bool, depth_always: bool, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &shader, entry_point: vs, compilation_options: wgpu::PipelineCompilationOptions::default(), buffers },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: fs,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: depth_write,
+                    depth_compare: if depth_always { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::Less },
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let sky_pipe = make("sky", "vs_sky", "fs_sky", &[], false, true, None);
+        let opaque_pipe = make("parts", "vs_part", "fs_part", &part_buffers, true, false, Some(wgpu::BlendState::REPLACE));
+        let alpha_pipe = make("parts-alpha", "vs_part", "fs_part", &part_buffers, false, false, Some(wgpu::BlendState::ALPHA_BLENDING));
+
+        let (verts, shape_ranges) = mesh::build();
+        let mesh_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("meshes"), contents: &bytes(&verts), usage: wgpu::BufferUsages::VERTEX });
         let depth_view = create_depth_view(&device, config.width, config.height);
-        Ok(Gfx { window, surface, device, queue, config, pipeline, bind_group, uniform_buf, vertex_buf, vertex_count: (verts.len() / 6) as u32, depth_view })
+        let egui = egui_wgpu::Renderer::new(&device, format, None, 1, false);
+        Ok(Gfx {
+            window,
+            surface,
+            device,
+            queue,
+            srgb: format.is_srgb(),
+            config,
+            sky_pipe,
+            opaque_pipe,
+            alpha_pipe,
+            bind_group,
+            globals,
+            mesh_buf,
+            shape_ranges,
+            instances: None,
+            opaque: Vec::new(),
+            alpha: Vec::new(),
+            depth_view,
+            egui,
+        })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -183,26 +196,97 @@ impl Gfx {
         self.depth_view = create_depth_view(&self.device, w, h);
     }
 
-    pub fn render(&mut self, cam: &OrbitCamera) {
-        let aspect = self.config.width as f32 / self.config.height as f32;
-        self.queue.write_buffer(&self.uniform_buf, 0, &f32_bytes(&cam.view_proj(aspect)));
+    /// Uploads the parts of `scene` as instance data (call when the scene changed).
+    pub fn upload_scene(&mut self, scene: &Scene) {
+        let mut groups: Vec<Vec<f32>> = vec![Vec::new(); mesh::SHAPES * 2];
+        for p in &scene.parts {
+            if p.alpha <= 0.01 {
+                continue;
+            }
+            let g = mesh::shape_index(p.shape) * 2 + usize::from(p.alpha < 0.99);
+            let v = &mut groups[g];
+            v.extend_from_slice(&p.model);
+            v.extend_from_slice(&[p.color[0], p.color[1], p.color[2], p.alpha]);
+            v.extend_from_slice(&[if p.material == 288 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]);
+        }
+        let mut all: Vec<f32> = Vec::new();
+        self.opaque.clear();
+        self.alpha.clear();
+        for (i, g) in groups.iter().enumerate() {
+            if g.is_empty() {
+                continue;
+            }
+            let start = (all.len() / INSTANCE_FLOATS) as u32;
+            all.extend_from_slice(g);
+            let range = start..(all.len() / INSTANCE_FLOATS) as u32;
+            let list = if i % 2 == 0 { &mut self.opaque } else { &mut self.alpha };
+            list.push((i / 2, range));
+        }
+        self.instances = if all.is_empty() {
+            None
+        } else {
+            Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instances"), contents: &bytes(&all), usage: wgpu::BufferUsages::VERTEX }))
+        };
+    }
+
+    fn write_globals(&self, s: &SceneInput) {
+        let aspect = (s.viewport[2] / s.viewport[3].max(1.0)).max(0.01);
+        let vp = s.cam.view_proj(aspect);
+        let l = s.lighting;
+        let sun = moge_scene::sun_direction(l.sky.clock_time);
+        let fwd = s.cam.forward();
+        let (right, up) = s.cam.basis();
+        let t = 30f32.to_radians().tan();
+        let eye = s.cam.eye();
+        let mut g: Vec<f32> = Vec::with_capacity(GLOBAL_FLOATS);
+        g.extend_from_slice(&vp);
+        g.extend_from_slice(&[sun[0], sun[1], sun[2], l.brightness]);
+        g.extend_from_slice(&[l.ambient[0], l.ambient[1], l.ambient[2], l.fog_start]);
+        g.extend_from_slice(&[l.outdoor_ambient[0], l.outdoor_ambient[1], l.outdoor_ambient[2], l.fog_end]);
+        g.extend_from_slice(&[l.fog_color[0], l.fog_color[1], l.fog_color[2], if self.srgb { 1.0 } else { 0.0 }]);
+        g.extend_from_slice(&[eye[0], eye[1], eye[2], 0.0]);
+        g.extend_from_slice(&[fwd[0], fwd[1], fwd[2], 0.0]);
+        g.extend_from_slice(&[right[0] * t * aspect, right[1] * t * aspect, right[2] * t * aspect, 0.0]);
+        g.extend_from_slice(&[up[0] * t, up[1] * t, up[2] * t, 0.0]);
+        g.extend_from_slice(&[(l.sky.star_count as f32 / 100_000.0).clamp(0.0, 0.05), l.sky.sun_size, l.sky.moon_size, if l.sky.celestial_bodies { 1.0 } else { 0.0 }]);
+        self.queue.write_buffer(&self.globals, 0, &bytes(&g));
+    }
+
+    pub fn render(&mut self, s: &SceneInput, ui: EguiInput) {
+        let (sw, sh) = (self.config.width as f32, self.config.height as f32);
+        let x = s.viewport[0].clamp(0.0, sw - 1.0).floor();
+        let y = s.viewport[1].clamp(0.0, sh - 1.0).floor();
+        let w = s.viewport[2].min(sw - x).floor();
+        let h = s.viewport[3].min(sh - y).floor();
+        let draw3d = s.draw3d && w >= 2.0 && h >= 2.0;
+        if draw3d {
+            self.write_globals(&SceneInput { cam: s.cam, lighting: s.lighting, viewport: [x, y, w, h], draw3d: true });
+        }
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("Surface frame unavailable ({e}); reconfiguring");
                 self.surface.configure(&self.device, &self.config);
+                for id in &ui.textures.free {
+                    self.egui.free_texture(id);
+                }
                 return;
             }
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        for (id, delta) in &ui.textures.set {
+            self.egui.update_texture(&self.device, &self.queue, *id, delta);
+        }
+        let sd = egui_wgpu::ScreenDescriptor { size_in_pixels: [self.config.width, self.config.height], pixels_per_point: ui.ppp };
+        let extra = self.egui.update_buffers(&self.device, &self.queue, &mut enc, &ui.prims, &sd);
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main"),
+                label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(CLEAR), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.07, g: 0.07, b: 0.08, a: 1.0 }), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
@@ -212,12 +296,42 @@ impl Gfx {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
+            if draw3d {
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                pass.set_pipeline(&self.sky_pipe);
+                pass.draw(0..3, 0..1);
+                if let Some(inst) = &self.instances {
+                    pass.set_vertex_buffer(0, self.mesh_buf.slice(..));
+                    pass.set_vertex_buffer(1, inst.slice(..));
+                    pass.set_pipeline(&self.opaque_pipe);
+                    for (shape, r) in &self.opaque {
+                        pass.draw(self.shape_ranges[*shape].clone(), r.clone());
+                    }
+                    pass.set_pipeline(&self.alpha_pipe);
+                    for (shape, r) in &self.alpha {
+                        pass.draw(self.shape_ranges[*shape].clone(), r.clone());
+                    }
+                }
+            }
         }
-        self.queue.submit(Some(enc.finish()));
+        {
+            let mut pass = enc
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("ui"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                })
+                .forget_lifetime();
+            self.egui.render(&mut pass, &ui.prims, &sd);
+        }
+        self.queue.submit(extra.into_iter().chain(std::iter::once(enc.finish())));
         frame.present();
+        for id in &ui.textures.free {
+            self.egui.free_texture(id);
+        }
     }
 }

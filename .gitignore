@@ -1,3 +1,4 @@
 target/
 *.keystore
 Cargo.lock.bak
+crates/moge-app/assets/Full-API-Dump.json

@@ -2,10 +2,13 @@
 mod binary;
 mod error;
 mod lz4;
+mod normalize;
 mod rbxlx;
 mod xml;
+mod writer;
 
 pub use error::FormatError;
+pub use writer::write_rbxlx;
 use moge_core::{Id, Tree};
 
 /// Result of an import. `roots` are detached top-level instances (a DataModel for binary places,
@@ -17,11 +20,15 @@ pub struct Import {
 }
 
 pub fn load_binary(data: &[u8], tree: &mut Tree) -> Result<Import, FormatError> {
-    binary::load(data, tree)
+    let imp = binary::load(data, tree)?;
+    normalize::run(tree, &imp.roots);
+    Ok(imp)
 }
 
 pub fn load_xml(text: &str, tree: &mut Tree) -> Result<Import, FormatError> {
-    rbxlx::load(text, tree)
+    let imp = rbxlx::load(text, tree)?;
+    normalize::run(tree, &imp.roots);
+    Ok(imp)
 }
 
 /// Detects the container (binary magic or XML) and imports it.

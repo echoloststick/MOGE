@@ -31,6 +31,85 @@ impl Json {
     }
 }
 
+impl Json {
+    pub fn stringify(&self) -> String {
+        let mut s = String::new();
+        self.write(&mut s);
+        s
+    }
+    fn write(&self, out: &mut String) {
+        match self {
+            Json::Null => out.push_str("null"),
+            Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Json::Num(n) if !n.is_finite() => out.push_str("null"),
+            Json::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => out.push_str(&(*n as i64).to_string()),
+            Json::Num(n) => out.push_str(&n.to_string()),
+            Json::Str(s) => write_str(s, out),
+            Json::Arr(a) => {
+                out.push('[');
+                for (i, v) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    v.write(out);
+                }
+                out.push(']');
+            }
+            Json::Obj(o) => {
+                out.push('{');
+                for (i, (k, v)) in o.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_str(k, out);
+                    out.push(':');
+                    v.write(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
+pub fn write_str(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// f32 as the shortest decimal that round-trips, so saved files stay compact.
+pub fn num32(f: f32) -> Json {
+    if f.is_finite() {
+        Json::Num(f.to_string().parse().unwrap_or(0.0))
+    } else if f.is_nan() {
+        Json::Str("nan".into())
+    } else if f > 0.0 {
+        Json::Str("inf".into())
+    } else {
+        Json::Str("-inf".into())
+    }
+}
+
+pub fn parse_num32(j: &Json) -> Option<f32> {
+    match j {
+        Json::Num(n) => Some(*n as f32),
+        Json::Str(s) if s == "inf" => Some(f32::INFINITY),
+        Json::Str(s) if s == "-inf" => Some(f32::NEG_INFINITY),
+        Json::Str(s) if s == "nan" => Some(f32::NAN),
+        _ => None,
+    }
+}
+
 pub fn parse(src: &str) -> Result<Json, String> {
     let mut p = P { b: src.as_bytes(), i: 0 };
     let v = p.value(0)?;
@@ -210,6 +289,15 @@ mod tests {
         let j = parse(r#"{"a":[1,2.5,-3e2,true,null],"b":"x\né😀"}"#).unwrap();
         assert_eq!(j.get("a").unwrap().as_arr().unwrap().len(), 5);
         assert_eq!(j.get("b").unwrap().as_str().unwrap(), "x\né😀");
+    }
+
+    #[test]
+    fn writer_round_trips() {
+        let src = r#"{"a":[1,2.5,-3,true,null],"b":"q\"\\\n\u0001é","c":{}}"#;
+        let j = parse(src).unwrap();
+        assert_eq!(parse(&j.stringify()).unwrap(), j);
+        assert_eq!(num32(0.1).stringify(), "0.1");
+        assert_eq!(parse_num32(&parse(&num32(f32::INFINITY).stringify()).unwrap()), Some(f32::INFINITY));
     }
 
     #[test]

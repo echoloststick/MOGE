@@ -10,9 +10,20 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+moge-core = { path = "../moge-core" }
+moge-formats = { path = "../moge-formats" }
+moge-gui = { path = "../moge-gui" }
 moge-math = { path = "../moge-math" }
+moge-roblox = { path = "../moge-roblox" }
+moge-scene = { path = "../moge-scene" }
+moge-script = { path = "../moge-script" }
 winit = { version = "0.30", features = ["android-native-activity"] }
 wgpu = "22"
+egui = { version = "0.29", default-features = false, features = ["default_fonts"] }
+egui-wgpu = { version = "0.29", default-features = false }
+ureq = "2"
+webbrowser = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 pollster = "0.3"
 log = "0.4"
 
@@ -28,6 +39,18 @@ debug = false
 package = "com.studiomobi.moge"
 apk_name = "MOGE"
 build_targets = ["aarch64-linux-android"]
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MANAGE_EXTERNAL_STORAGE"
 
 [package.metadata.android.sdk]
 min_sdk_version = 26

@@ -106,6 +106,11 @@ impl Tree {
     }
 
     pub fn set_parent(&mut self, id: Id, parent: Option<Id>) -> Result<(), TreeError> {
+        self.attach(id, parent, None)
+    }
+
+    /// Moves `id` under `parent` at `index` (append when None). Used by undo to restore exact positions.
+    pub fn attach(&mut self, id: Id, parent: Option<Id>, index: Option<usize>) -> Result<(), TreeError> {
         if id == Self::ROOT {
             return Err(TreeError::RootImmutable);
         }
@@ -127,13 +132,80 @@ impl Tree {
         }
         if let Some(p) = parent {
             if let Some(n) = self.node_mut(p) {
-                n.children.push(id);
+                let at = index.unwrap_or(n.children.len()).min(n.children.len());
+                n.children.insert(at, id);
             }
         }
         if let Some(n) = self.node_mut(id) {
             n.parent = parent;
         }
         Ok(())
+    }
+
+    pub fn index_in_parent(&self, id: Id) -> Option<usize> {
+        let p = self.node(id)?.parent?;
+        self.node(p)?.children.iter().position(|c| *c == id)
+    }
+
+    /// True when the instance is reachable from the DataModel (not deleted/detached).
+    pub fn is_attached(&self, id: Id) -> bool {
+        let mut cur = Some(id);
+        let mut guard = 0;
+        while let Some(c) = cur {
+            if c == Self::ROOT {
+                return true;
+            }
+            cur = self.node(c).and_then(|n| n.parent);
+            guard += 1;
+            if guard > 100_000 {
+                return false;
+            }
+        }
+        false
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = Id> + '_ {
+        self.nodes.iter().enumerate().filter(|(_, n)| n.is_some()).map(|(i, _)| i)
+    }
+
+    pub fn remove_prop(&mut self, id: Id, name: &str) -> Option<Value> {
+        self.node_mut(id)?.props.remove(name)
+    }
+
+    /// Deep copy (detached). Ref properties that point inside the copied subtree are remapped.
+    pub fn clone_subtree(&mut self, id: Id) -> Result<Id, TreeError> {
+        self.require(id)?;
+        let mut old: Vec<Id> = vec![id];
+        old.extend(self.descendants(id));
+        let mut map = std::collections::HashMap::new();
+        for &o in &old {
+            let n = self.node(o).cloned().ok_or(TreeError::Dead(o))?;
+            let new = self.create(&n.class);
+            if let Some(nn) = self.node_mut(new) {
+                nn.props = n.props;
+                nn.attributes = n.attributes;
+                nn.tags = n.tags;
+            }
+            map.insert(o, new);
+        }
+        for &o in &old {
+            let new = map[&o];
+            if let Some(Some(p)) = self.node(o).map(|n| n.parent) {
+                if let Some(np) = map.get(&p) {
+                    self.attach(new, Some(*np), None)?;
+                }
+            }
+            if let Some(n) = self.node_mut(new) {
+                for v in n.props.values_mut() {
+                    if let Value::Ref(Some(r)) = v {
+                        if let Some(m) = map.get(r) {
+                            *v = Value::Ref(Some(*m));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(map[&id])
     }
 
     /// Destroys an instance and its subtree; Ref properties pointing into it become nil.
@@ -218,9 +290,8 @@ impl Tree {
         self.node(id)?.props.get(name)
     }
 
-    /// Editor-facing write: validates against the API Dump, coerces the value and converts
-    /// image ids (rbxassetid, URLs, bare numbers) into rbxthumb URIs.
-    pub fn set_prop_checked(&mut self, dump: &ApiDump, id: Id, prop: &str, value: Value) -> Result<(), TreeError> {
+    /// Validates and converts a value for `prop` (type check, int->float, image id -> rbxthumb).
+    pub fn prepare_value(&self, dump: &ApiDump, id: Id, prop: &str, value: Value) -> Result<Value, TreeError> {
         let class = self.require(id)?.class.clone();
         let info = dump
             .property(&class, prop)
@@ -241,6 +312,13 @@ impl Tree {
                 v = Value::String(t);
             }
         }
+        Ok(v)
+    }
+
+    /// Editor-facing write: validates against the API Dump, coerces the value and converts
+    /// image ids (rbxassetid, URLs, bare numbers) into rbxthumb URIs.
+    pub fn set_prop_checked(&mut self, dump: &ApiDump, id: Id, prop: &str, value: Value) -> Result<(), TreeError> {
+        let v = self.prepare_value(dump, id, prop, value)?;
         self.set_prop(id, prop, v)
     }
 

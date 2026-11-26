@@ -1,52 +1,134 @@
-//! MOGE app shell: window, touch/mouse input and the render loop. Android entry point is `android_main`.
+//! MOGE app shell: window, egui frame loop, GPU renderer. Android entry point is `android_main`.
 mod gfx;
+mod guiedit;
+mod input;
+mod mesh;
+mod net;
+mod panels;
+mod script;
+mod studio;
+mod viewport;
 
-use gfx::Gfx;
-use moge_math::OrbitCamera;
-use std::collections::HashMap;
+use gfx::{EguiInput, Gfx, SceneInput};
+use input::Input;
+use std::path::PathBuf;
+use std::time::Instant;
+use studio::{Studio, Tab};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-#[derive(Default)]
+/// Where the app keeps its files and which folders the file browser offers first.
+pub struct Dirs {
+    pub data: PathBuf,
+    pub start: Vec<(String, PathBuf)>,
+}
+
+impl Dirs {
+    pub fn desktop() -> Dirs {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+        let mut start = vec![("Home".to_string(), home.clone())];
+        for (n, d) in [("Documents", "Documents"), ("Downloads", "Downloads"), ("Desktop", "Desktop")] {
+            let p = home.join(d);
+            if p.is_dir() {
+                start.push((n.to_string(), p));
+            }
+        }
+        Dirs { data: home.join(".moge"), start }
+    }
+}
+
+fn new_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.set_visuals(egui::Visuals::dark());
+    ctx.style_mut(|s| {
+        s.spacing.interact_size = egui::vec2(40.0, 34.0);
+        s.spacing.button_padding = egui::vec2(10.0, 6.0);
+        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        s.spacing.scroll.bar_width = 10.0;
+        for (st, size) in [(egui::TextStyle::Body, 16.0), (egui::TextStyle::Button, 16.0), (egui::TextStyle::Small, 12.0), (egui::TextStyle::Heading, 22.0)] {
+            s.text_styles.insert(st, egui::FontId::proportional(size));
+        }
+        s.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
+    });
+    ctx
+}
+
 struct App {
     gfx: Option<Gfx>,
-    cam: OrbitCamera,
-    touches: HashMap<u64, (f64, f64)>,
-    mouse_down: bool,
-    mouse_last: Option<(f64, f64)>,
+    ctx: egui::Context,
+    input: Input,
+    studio: Studio,
+    start: Instant,
+    uploaded_rev: u64,
+    #[cfg(target_os = "android")]
+    android: Option<winit::platform::android::activity::AndroidApp>,
+    #[cfg(target_os = "android")]
+    system_kb: bool,
 }
 
 impl App {
-    fn touch(&mut self, t: Touch) {
-        let (x, y) = (t.location.x, t.location.y);
-        match t.phase {
-            TouchPhase::Started => {
-                self.touches.insert(t.id, (x, y));
+    fn new(dirs: Dirs) -> App {
+        App {
+            gfx: None,
+            ctx: new_context(),
+            input: Input::default(),
+            studio: Studio::new(dirs.data, dirs.start),
+            start: Instant::now(),
+            uploaded_rev: u64::MAX,
+            #[cfg(target_os = "android")]
+            android: None,
+            #[cfg(target_os = "android")]
+            system_kb: false,
+        }
+    }
+
+    fn frame(&mut self) {
+        let Some(g) = self.gfx.as_mut() else { return };
+        let ppp = g.window.scale_factor() as f32;
+        self.ctx.set_pixels_per_point(ppp);
+        let (w, h) = g.size();
+        let mut raw = self.input.take((w, h), ppp, self.start.elapsed().as_secs_f64());
+        raw.events.extend(self.studio.inject.drain(..));
+        let studio = &mut self.studio;
+        let out = self.ctx.run(raw, |ctx| {
+            studio.poll_net(ctx);
+            studio.autosave();
+            studio.ui(ctx);
+            if !ctx.wants_keyboard_input() && !ctx.input(|i| i.pointer.any_down()) {
+                studio.ed.live_end();
             }
-            TouchPhase::Moved => {
-                let old = self.touches.insert(t.id, (x, y));
-                let Some((ox, oy)) = old else { return };
-                match self.touches.len() {
-                    1 => self.cam.orbit((x - ox) as f32, (y - oy) as f32),
-                    2 => {
-                        let other = self.touches.iter().find(|(k, _)| **k != t.id).map(|(_, v)| *v);
-                        if let Some((px, py)) = other {
-                            let before = (ox - px).hypot(oy - py);
-                            let after = (x - px).hypot(y - py);
-                            if before > 1.0 && after > 1.0 {
-                                self.cam.zoom((before / after) as f32);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            TouchPhase::Ended | TouchPhase::Cancelled => {
-                self.touches.remove(&t.id);
+        });
+        if !out.platform_output.copied_text.is_empty() {
+            studio.clipboard = out.platform_output.copied_text.clone();
+        }
+        if let Some(u) = &out.platform_output.open_url {
+            if let Err(e) = webbrowser::open(&u.url) {
+                log::warn!("Could not open {}: {e}", u.url);
             }
         }
+        #[cfg(target_os = "android")]
+        {
+            let wants = self.ctx.wants_keyboard_input() && !studio.settings.vkb;
+            if wants != self.system_kb {
+                self.system_kb = wants;
+                if let Some(a) = &self.android {
+                    if wants {
+                        a.show_soft_input(true);
+                    } else {
+                        a.hide_soft_input(true);
+                    }
+                }
+            }
+        }
+        let view3d = studio.tab == Tab::View3d;
+        if view3d && (studio.refresh_scene() || self.uploaded_rev != studio.scene_rev) {
+            g.upload_scene(&studio.scene);
+            self.uploaded_rev = studio.scene_rev;
+        }
+        let prims = self.ctx.tessellate(out.shapes, out.pixels_per_point);
+        g.render(&SceneInput { cam: &studio.cam, lighting: &studio.scene.lighting, viewport: studio.viewport_px, draw3d: view3d }, EguiInput { prims, textures: out.textures_delta, ppp });
     }
 }
 
@@ -65,6 +147,10 @@ impl ApplicationHandler for App {
         };
         match pollster::block_on(Gfx::new(window)) {
             Ok(g) => {
+                // A new renderer knows none of the old egui textures, so the UI context and image cache restart too.
+                self.ctx = new_context();
+                self.studio.images.clear();
+                self.uploaded_rev = u64::MAX;
                 g.window.request_redraw();
                 self.gfx = Some(g);
             }
@@ -78,10 +164,12 @@ impl ApplicationHandler for App {
     /// Android destroys the native window when the app goes to the background; drop the surface with it.
     fn suspended(&mut self, _el: &ActiveEventLoop) {
         self.gfx = None;
-        self.touches.clear();
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let Some(g) = &self.gfx {
+            self.input.on_event(&event, g.window.scale_factor() as f32);
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => {
@@ -89,32 +177,9 @@ impl ApplicationHandler for App {
                     g.resize(s.width, s.height);
                 }
             }
-            WindowEvent::Touch(t) => self.touch(t),
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                self.mouse_down = state == ElementState::Pressed;
-                if !self.mouse_down {
-                    self.mouse_last = None;
-                }
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let p = (position.x, position.y);
-                if self.mouse_down {
-                    if let Some((lx, ly)) = self.mouse_last {
-                        self.cam.orbit((p.0 - lx) as f32, (p.1 - ly) as f32);
-                    }
-                    self.mouse_last = Some(p);
-                }
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let y = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => (p.y / 40.0) as f32,
-                };
-                self.cam.zoom(0.9f32.powf(y));
-            }
             WindowEvent::RedrawRequested => {
-                if let Some(g) = &mut self.gfx {
-                    g.render(&self.cam);
+                self.frame();
+                if let Some(g) = &self.gfx {
                     g.window.request_redraw();
                 }
             }
@@ -123,12 +188,16 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(event_loop: EventLoop<()>) {
+pub fn run_with(event_loop: EventLoop<()>, dirs: Dirs) {
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App { cam: OrbitCamera::default(), ..Default::default() };
+    let mut app = App::new(dirs);
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("Event loop terminated with an error: {e}");
     }
+}
+
+pub fn run(event_loop: EventLoop<()>) {
+    run_with(event_loop, Dirs::desktop());
 }
 
 #[cfg(target_os = "android")]
@@ -136,8 +205,26 @@ pub fn run(event_loop: EventLoop<()>) {
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
     android_logger::init_once(android_logger::Config::default().with_max_level(log::LevelFilter::Info));
-    match EventLoop::builder().with_android_app(app).build() {
-        Ok(el) => run(el),
+    let internal = app.internal_data_path().unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
+    let external = app.external_data_path();
+    let mut start: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(e) = &external {
+        start.push(("App folder".into(), e.clone()));
+    }
+    start.push(("App private".into(), internal.clone()));
+    for (n, p) in [("Storage", "/storage/emulated/0"), ("Download", "/storage/emulated/0/Download"), ("Documents", "/storage/emulated/0/Documents")] {
+        start.push((n.into(), PathBuf::from(p)));
+    }
+    let dirs = Dirs { data: internal, start };
+    match EventLoop::builder().with_android_app(app.clone()).build() {
+        Ok(el) => {
+            let mut a = App::new(dirs);
+            a.android = Some(app);
+            el.set_control_flow(ControlFlow::Poll);
+            if let Err(e) = el.run_app(&mut a) {
+                log::error!("Event loop terminated with an error: {e}");
+            }
+        }
         Err(e) => log::error!("Failed to create the event loop: {e}"),
     }
 }
