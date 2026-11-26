@@ -51,7 +51,7 @@ jobs:
       - name: Use a fixed signing key and an increasing version code (lets new APKs update the installed app)
         run: |
           mkdir -p ~/.android
-          cp crates/moge-app/moge-debug.keystore ~/.android/debug.keystore
+          base64 -d crates/moge-app/moge-debug.keystore.b64 > ~/.android/debug.keystore
           sed -i "s/^version_code = .*/version_code = ${{ github.run_number }}/" crates/moge-app/Cargo.toml
 
       - name: Install cargo-apk
