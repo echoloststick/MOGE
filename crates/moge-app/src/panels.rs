@@ -922,7 +922,7 @@ impl Studio {
         let mut open = true;
         egui::Window::new("Settings").open(&mut open).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).default_width(440.0).collapsible(false).show(ctx, |ui| {
             egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
-                ui.checkbox(&mut self.settings.vkb, "On-screen keyboard for text fields");
+                ui.checkbox(&mut self.settings.vkb, "Use the built-in on-screen keyboard (off = Android keyboard)");
                 ui.horizontal(|ui| {
                     ui.label("UI size");
                     ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.35..=1.5));

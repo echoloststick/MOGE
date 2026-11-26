@@ -269,6 +269,15 @@ fn set_parent_fire(lua: &Lua, sh: &Sh, id: Id, new: Option<Id>) -> Result<()> {
     Ok(())
 }
 
+impl mlua::FromLua for Inst {
+    fn from_lua(v: LV, _: &Lua) -> Result<Self> {
+        match &v {
+            LV::UserData(u) => Ok((*u.borrow::<Self>()?).clone()),
+            _ => Err(mlua::Error::runtime("expected an Instance")),
+        }
+    }
+}
+
 impl UserData for Signal {
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         fn connect(lua: &Lua, s: &Signal, f: Function, once: bool) -> Result<LV> {
@@ -304,7 +313,9 @@ impl UserData for Connection {
             }
             Ok(())
         });
-        m.add_field_method_get("Connected", |_, c| Ok(c.sh.borrow().handlers.get(&c.key).map(|v| v.iter().any(|h| h.0 == c.cid)).unwrap_or(false)));
+    }
+    fn add_fields<F: mlua::UserDataFields<Self>>(f: &mut F) {
+        f.add_field_method_get("Connected", |_, c| Ok(c.sh.borrow().handlers.get(&c.key).map(|v| v.iter().any(|h| h.0 == c.cid)).unwrap_or(false)));
     }
 }
 

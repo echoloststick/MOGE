@@ -113,7 +113,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn defaults() -> Settings {
-        Settings { redirect: "http://localhost:3000/callback".into(), vkb: cfg!(target_os = "android"), snap_move: 1.0, snap_rot: 15.0, snap_scale: 0.5, ui_scale: if cfg!(target_os = "android") { 0.6 } else { 1.0 }, ..Default::default() }
+        Settings { redirect: "http://localhost:3000/callback".into(), vkb: false, snap_move: 1.0, snap_rot: 15.0, snap_scale: 0.5, ui_scale: if cfg!(target_os = "android") { 0.6 } else { 1.0 }, ..Default::default() }
     }
 
     pub fn parse(text: &str) -> Settings {
@@ -128,7 +128,7 @@ impl Settings {
                 "api_key" => s.api_key = v.into(),
                 "universe" => s.universe = v.into(),
                 "place" => s.place = v.into(),
-                "vkb" => s.vkb = v == "1",
+                "vkb_custom" => s.vkb = v == "1",
                 "snap_move" => s.snap_move = v.parse().unwrap_or(s.snap_move),
                 "snap_rot" => s.snap_rot = v.parse().unwrap_or(s.snap_rot),
                 "snap_scale" => s.snap_scale = v.parse().unwrap_or(s.snap_scale),
@@ -142,7 +142,7 @@ impl Settings {
     pub fn serialize(&self) -> String {
         let clean = |s: &str| s.replace(['\n', '\r'], " ");
         format!(
-            "client_id={}\nredirect={}\ncookie={}\napi_key={}\nuniverse={}\nplace={}\nvkb={}\nsnap_move={}\nsnap_rot={}\nsnap_scale={}\nui_scale={}\n",
+            "client_id={}\nredirect={}\ncookie={}\napi_key={}\nuniverse={}\nplace={}\nvkb_custom={}\nsnap_move={}\nsnap_rot={}\nsnap_scale={}\nui_scale={}\n",
             clean(&self.client_id),
             clean(&self.redirect),
             clean(&self.cookie),

@@ -4,6 +4,20 @@ use moge_core::ApiDump;
 use moge_math::{euler_yxz_to_rot, mat3_mul, rot_to_euler_yxz};
 use std::sync::Arc;
 
+macro_rules! from_lua_ud {
+    ($($t:ty),*) => {$(
+        impl mlua::FromLua for $t {
+            fn from_lua(v: Value, _: &Lua) -> Result<Self> {
+                match &v {
+                    Value::UserData(u) => Ok((*u.borrow::<Self>()?).clone()),
+                    _ => Err(mlua::Error::runtime(concat!("expected a ", stringify!($t), " value"))),
+                }
+            }
+        }
+    )*};
+}
+from_lua_ud!(Vector3, Vector2, Color3, UDim, UDim2, CFrame, EnumItem);
+
 pub fn fmt_num(f: f32) -> String {
     if f.fract() == 0.0 && f.abs() < 1e9 {
         format!("{}", f as i64)
