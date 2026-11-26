@@ -111,6 +111,10 @@ impl App {
         });
         if !out.platform_output.copied_text.is_empty() {
             studio.clipboard = out.platform_output.copied_text.clone();
+            #[cfg(target_os = "android")]
+            if let Some(a) = &self.android {
+                clip::set_clipboard_text(a, &studio.clipboard);
+            }
         }
         if let Some(u) = &out.platform_output.open_url {
             if let Err(e) = webbrowser::open(&u.url) {

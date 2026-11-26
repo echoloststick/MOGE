@@ -57,10 +57,25 @@ impl Studio {
     pub fn ui(&mut self, ctx: &Context) {
         self.track_keyboard(ctx);
         if !self.settings.vkb && ctx.wants_keyboard_input() {
-            egui::Area::new(egui::Id::new("paste_btn")).anchor(Align2::RIGHT_TOP, [-8.0, 52.0]).order(egui::Order::Foreground).show(ctx, |ui| {
-                if key_button(ui, "Paste", egui::vec2(64.0, 34.0)) {
-                    self.paste_req = true;
-                }
+            egui::Area::new(egui::Id::new("edit_bar")).anchor(Align2::RIGHT_TOP, [-8.0, 52.0]).order(egui::Order::Foreground).show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let sz = egui::vec2(82.0, 34.0);
+                        if key_button(ui, "Select all", sz) {
+                            let m = egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: true };
+                            self.inject.push(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: m });
+                        }
+                        if key_button(ui, "Copy", sz) {
+                            self.inject.push(egui::Event::Copy);
+                        }
+                        if key_button(ui, "Cut", sz) {
+                            self.inject.push(egui::Event::Cut);
+                        }
+                        if key_button(ui, "Paste", sz) {
+                            self.paste_req = true;
+                        }
+                    });
+                });
             });
         }
         self.top_bar(ctx);

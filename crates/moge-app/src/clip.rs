@@ -22,3 +22,23 @@ pub fn clipboard_text(app: &winit::platform::android::activity::AndroidApp) -> O
     let text: String = env.get_string(&js).ok()?.into();
     Some(text)
 }
+
+#[cfg(target_os = "android")]
+pub fn set_clipboard_text(app: &winit::platform::android::activity::AndroidApp, text: &str) -> Option<()> {
+    use jni::objects::{JObject, JValue};
+    use jni::JavaVM;
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
+    let mut env = vm.attach_current_thread().ok()?;
+    let act = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+    let name = env.new_string("clipboard").ok()?;
+    let svc = env.call_method(&act, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", &[JValue::Object(&name)]).ok()?.l().ok()?;
+    let label = env.new_string("MOGE").ok()?;
+    let txt = env.new_string(text).ok()?;
+    let clip = env
+        .call_static_method("android/content/ClipData", "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;", &[JValue::Object(&label), JValue::Object(&txt)])
+        .ok()?
+        .l()
+        .ok()?;
+    env.call_method(&svc, "setPrimaryClip", "(Landroid/content/ClipData;)V", &[JValue::Object(&clip)]).ok()?;
+    Some(())
+}
