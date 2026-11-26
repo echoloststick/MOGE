@@ -134,11 +134,24 @@ fn fs_part(inp: PartOut) -> @location(0) vec4<f32> {
     let day = smoothstep(-0.12, 0.15, sd.y);
     let diff = max(dot(n, sd), 0.0);
     let hemi = (g.ambient.rgb + g.outdoor.rgb) * 0.5 * (0.7 + 0.3 * n.y);
-    var light = vec3<f32>(0.30) * (0.3 + 0.7 * day) + hemi * (0.35 + 0.65 * day) + vec3<f32>(1.0, 0.98, 0.94) * diff * min(g.sun.w, 6.0) * 0.22 * day;
-    light = min(light, vec3<f32>(1.35));
-    var col = inp.color.rgb * light;
-    if (inp.params.x > 0.5) { col = inp.color.rgb * 1.15; } // Neon: emissive
+    var light = vec3<f32>(0.30) * (0.3 + 0.7 * day) + hemi * (0.35 + 0.65 * day) + vec3<f32>(1.0, 0.98, 0.94) * diff * min(g.sun.w, 6.0) * 0.42 * day;
+    light = min(light, vec3<f32>(1.25));
     let dist = length(g.cam_pos.xyz - inp.world);
+    var base = inp.color.rgb;
+    // Studs on flat upward faces (Roblox default surface), fading out with distance.
+    if (n.y > 0.985 && inp.params.x < 0.5 && inp.color.a > 0.99) {
+        let cell = fract(inp.world.xz) - vec2<f32>(0.5);
+        let r = length(cell);
+        let fade = 1.0 - smoothstep(40.0, 120.0, dist);
+        let ring = smoothstep(0.34, 0.30, r) - smoothstep(0.30, 0.22, r) * 0.0;
+        let top = smoothstep(0.26, 0.22, r);
+        let shade = 1.0 + (top * 0.10 - (ring - top) * 0.16) * fade;
+        base = base * shade;
+    }
+    // Soft contact shading on vertical faces keeps edges readable.
+    light = light * (0.88 + 0.12 * n.y);
+    var col = base * light;
+    if (inp.params.x > 0.5) { col = inp.color.rgb * 1.15; } // Neon: emissive
     let span = max(g.outdoor.w - g.ambient.w, 1.0);
     let f = clamp((dist - g.ambient.w) / span, 0.0, 1.0) * select(0.0, 1.0, g.outdoor.w < 90000.0);
     col = mix(col, g.fog.rgb, f);

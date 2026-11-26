@@ -107,11 +107,13 @@ pub struct Settings {
     pub snap_move: f32,
     pub snap_rot: f32,
     pub snap_scale: f32,
+    /// UI size multiplier on top of the screen density (0 = default for the platform).
+    pub ui_scale: f32,
 }
 
 impl Settings {
     pub fn defaults() -> Settings {
-        Settings { redirect: "http://localhost:3000/callback".into(), vkb: cfg!(target_os = "android"), snap_move: 1.0, snap_rot: 15.0, snap_scale: 0.5, ..Default::default() }
+        Settings { redirect: "http://localhost:3000/callback".into(), vkb: cfg!(target_os = "android"), snap_move: 1.0, snap_rot: 15.0, snap_scale: 0.5, ui_scale: if cfg!(target_os = "android") { 0.6 } else { 1.0 }, ..Default::default() }
     }
 
     pub fn parse(text: &str) -> Settings {
@@ -130,6 +132,7 @@ impl Settings {
                 "snap_move" => s.snap_move = v.parse().unwrap_or(s.snap_move),
                 "snap_rot" => s.snap_rot = v.parse().unwrap_or(s.snap_rot),
                 "snap_scale" => s.snap_scale = v.parse().unwrap_or(s.snap_scale),
+                "ui_scale" => s.ui_scale = v.parse().unwrap_or(s.ui_scale),
                 _ => {}
             }
         }
@@ -139,7 +142,7 @@ impl Settings {
     pub fn serialize(&self) -> String {
         let clean = |s: &str| s.replace(['\n', '\r'], " ");
         format!(
-            "client_id={}\nredirect={}\ncookie={}\napi_key={}\nuniverse={}\nplace={}\nvkb={}\nsnap_move={}\nsnap_rot={}\nsnap_scale={}\n",
+            "client_id={}\nredirect={}\ncookie={}\napi_key={}\nuniverse={}\nplace={}\nvkb={}\nsnap_move={}\nsnap_rot={}\nsnap_scale={}\nui_scale={}\n",
             clean(&self.client_id),
             clean(&self.redirect),
             clean(&self.cookie),
@@ -149,7 +152,8 @@ impl Settings {
             u8::from(self.vkb),
             self.snap_move,
             self.snap_rot,
-            self.snap_scale
+            self.snap_scale,
+            self.ui_scale
         )
     }
 }
@@ -340,6 +344,7 @@ impl Studio {
         };
         s.open_nodes.insert(Tree::ROOT);
         s.load_dump();
+        s.log(Level::Info, if cfg!(feature = "luau") { "Luau runtime (mlua): included in this build" } else { "Luau runtime: NOT included in this build (the CI Luau build failed and fell back)" });
         s
     }
 

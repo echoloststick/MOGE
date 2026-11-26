@@ -44,11 +44,11 @@ fn new_context() -> egui::Context {
     let ctx = egui::Context::default();
     ctx.set_visuals(egui::Visuals::dark());
     ctx.style_mut(|s| {
-        s.spacing.interact_size = egui::vec2(40.0, 34.0);
-        s.spacing.button_padding = egui::vec2(10.0, 6.0);
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        s.spacing.interact_size = egui::vec2(30.0, 26.0);
+        s.spacing.button_padding = egui::vec2(7.0, 3.0);
+        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.scroll.bar_width = 10.0;
-        for (st, size) in [(egui::TextStyle::Body, 16.0), (egui::TextStyle::Button, 16.0), (egui::TextStyle::Small, 12.0), (egui::TextStyle::Heading, 22.0)] {
+        for (st, size) in [(egui::TextStyle::Body, 14.0), (egui::TextStyle::Button, 14.0), (egui::TextStyle::Small, 11.0), (egui::TextStyle::Heading, 18.0)] {
             s.text_styles.insert(st, egui::FontId::proportional(size));
         }
         s.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
@@ -87,7 +87,8 @@ impl App {
 
     fn frame(&mut self) {
         let Some(g) = self.gfx.as_mut() else { return };
-        let ppp = g.window.scale_factor() as f32;
+        let ui_scale = if self.studio.settings.ui_scale > 0.2 { self.studio.settings.ui_scale } else { 1.0 };
+        let ppp = g.window.scale_factor() as f32 * ui_scale;
         self.ctx.set_pixels_per_point(ppp);
         let (w, h) = g.size();
         let mut raw = self.input.take((w, h), ppp, self.start.elapsed().as_secs_f64());
@@ -169,7 +170,7 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if let Some(g) = &self.gfx {
-            self.input.on_event(&event, g.window.scale_factor() as f32);
+            self.input.on_event(&event, g.window.scale_factor() as f32 * if self.studio.settings.ui_scale > 0.2 { self.studio.settings.ui_scale } else { 1.0 });
         }
         match event {
             WindowEvent::CloseRequested => el.exit(),
@@ -217,6 +218,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         start.push((n.into(), PathBuf::from(p)));
     }
     let dirs = Dirs { data: internal, start };
+    app.set_window_flags(winit::platform::android::activity::WindowManagerFlags::FULLSCREEN, winit::platform::android::activity::WindowManagerFlags::empty());
     match EventLoop::builder().with_android_app(app.clone()).build() {
         Ok(el) => {
             let mut a = App::new(dirs);

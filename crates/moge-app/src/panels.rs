@@ -924,6 +924,10 @@ impl Studio {
             egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
                 ui.checkbox(&mut self.settings.vkb, "On-screen keyboard for text fields");
                 ui.horizontal(|ui| {
+                    ui.label("UI size");
+                    ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.35..=1.5));
+                });
+                ui.horizontal(|ui| {
                     ui.label("Move snap");
                     ui.add(egui::DragValue::new(&mut self.settings.snap_move).speed(0.1).range(0.0..=64.0));
                     ui.label("Rotate snap");

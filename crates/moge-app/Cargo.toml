@@ -63,6 +63,7 @@ target_sdk_version = 33
 
 [package.metadata.android.application]
 label = "MOGE"
+theme = "@android:style/Theme.NoTitleBar.Fullscreen"
 
 [package.metadata.android.application.activity]
 orientation = "landscape"
